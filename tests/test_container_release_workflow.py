@@ -106,10 +106,15 @@ def test_tag_release_builds_and_publishes_exact_platform_target() -> None:
     assert "scripts/build-control-deployment-bundle" in build
     assert "scripts/publish-platform-target describe-bundle" in build
     assert "scripts/build-platform-manifest" in build
-    publish = workflow_step("publish-platform-target", "Publish immutable platform target")
+    publish = workflow_step(
+        "publish-platform-target", "Publish immutable platform target"
+    )
     assert "scripts/publish-platform-target publish-authority" in publish
     assert "scripts/platform-release-authority" in publish
-    assert "VONK_PLATFORM_AUTHORITY_URL: ${{ vars.VONK_PLATFORM_AUTHORITY_URL }}" in publish
+    assert (
+        "VONK_PLATFORM_AUTHORITY_URL: ${{ vars.VONK_PLATFORM_AUTHORITY_URL }}"
+        in publish
+    )
     assert "VONK_PLATFORM_AUTHORITY_AUDIENCE:" in publish
     assert "ROOT_KEY" not in publish
 
@@ -137,7 +142,10 @@ def test_host_updater_has_a_separate_minimal_provenance_attestation_job() -> Non
 
     assert "attestations: write" not in builder
     assert "packages: write" not in attestor
-    assert "permissions:\n      contents: read\n      id-token: write\n      attestations: write" in attestor
+    assert (
+        "permissions:\n      contents: read\n      id-token: write\n      attestations: write"
+        in attestor
+    )
     assert "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in attestor
     assert "subject-path: release-output/vonk-forge-host-updater.tar" in attestor
     assert "attest-host-updater" in release.split("needs:", 1)[1].splitlines()[0]
@@ -161,8 +169,7 @@ def test_host_updater_uses_the_wheels_built_from_distribution_metadata() -> None
     build = workflow_step("publish-images", "Build canonical platform release")
 
     assert (
-        "--control-wheel "
-        "release-output/wheels/vonk_control-0.1.0-py3-none-any.whl"
+        "--control-wheel release-output/wheels/vonk_control-0.1.0-py3-none-any.whl"
     ) in build
     assert (
         "--platform-wheel "
@@ -188,11 +195,53 @@ def test_release_chain_is_default_off_and_dependency_gated() -> None:
     manifest = job("release-manifest")
 
     assert "vars.VONK_CONTAINER_RELEASES_ENABLED == 'true'" in metadata
-    assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
     assert (
-        "needs: [release-metadata, publish-images, attest-host-updater, "
-        "publish-platform-target]" in manifest
+        "needs: [lint, generated-clients, test, release-metadata, build-agent-package]"
+        in publisher
     )
+    assert (
+        "needs: [release-metadata, publish-images, build-agent-package, "
+        "attest-host-updater, publish-platform-target]" in manifest
+    )
+
+
+def test_tag_release_builds_agent_package_from_same_release_metadata() -> None:
+    package = job("build-agent-package")
+    manifest = job("release-manifest")
+
+    assert "runs-on: ubuntu-24.04-arm" in package
+    assert "environment: agent-release" in package
+    assert "needs: [release-metadata]" in package
+    assert "scripts/build-agent-deb" in package
+    assert "Test fresh, offline, upgrade, downgrade, remove lifecycle" in package
+    assert "needs.release-metadata.outputs.version" in package
+    assert "actions/upload-artifact@" in package
+    assert "platform-agent-release-" in package
+    assert "build-agent-package" in manifest.split("needs:", 1)[1].splitlines()[0]
+    assert "agent-package-evidence" in job("publish-images")
+    assert "vonk-forge-agent_" in job("publish-images")
+
+
+def test_tag_release_attaches_agent_package_to_public_release() -> None:
+    release = workflow_step("release-manifest", "Create public GitHub Release")
+    assert "vonk-forge-agent_" in release
+    assert "sigstore.json" in release
+
+
+def test_apt_publication_consumes_the_unified_release_artifact() -> None:
+    apt = job("publish-apt")
+
+    assert "needs: [release-metadata, build-agent-package, release-manifest]" in apt
+    assert "environment: apt-release" in apt
+    assert "platform-agent-release-${{ needs.release-metadata.outputs.version }}" in apt
+    assert "R2_APT_PUBLIC_BUCKET" in apt
+    assert "R2_APT_STATE_BUCKET" in apt
+    assert "scripts/verify-agent-deb" in apt
+
+
+def test_manual_agent_validation_does_not_publish_a_second_tag_release() -> None:
+    agent_workflow = (ROOT / ".github/workflows/agent-release.yml").read_text()
+    assert 'push:\n    tags: ["v*"]' not in agent_workflow
 
 
 def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
@@ -200,7 +249,10 @@ def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
     publisher = job("publish-images")
     manifest = job("release-manifest")
 
-    assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
+    assert (
+        "needs: [lint, generated-clients, test, release-metadata, build-agent-package]"
+        in publisher
+    )
     assert "permissions:\n      contents: read\n      packages: write" in publisher
     assert "packages: write" not in metadata
     assert "packages: write" not in manifest
@@ -308,7 +360,7 @@ def test_existing_version_guard_allows_only_known_absence(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "case $DOCKER_MODE in\n"
-        "  absent) echo \"ERROR: $4: not found\" >&2; exit 1 ;;\n"
+        '  absent) echo "ERROR: $4: not found" >&2; exit 1 ;;\n'
         "  existing) exit 0 ;;\n"
         "  registry-error) echo 'ERROR: registry returned 503' >&2; exit 1 ;;\n"
         "  mixed-error) printf 'ERROR: %s: not found\\nERROR: registry returned 503\\n' \"$4\" >&2; exit 1 ;;\n"
@@ -362,10 +414,7 @@ def test_release_manifest_checks_out_scripts_before_using_them() -> None:
     manifest = job("release-manifest")
     checkout = workflow_step("release-manifest", "Check out tagged commit")
 
-    assert (
-        "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-        in checkout
-    )
+    assert "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in checkout
     assert "persist-credentials: false" in checkout
     assert manifest.index("Check out tagged commit") < manifest.index(
         "scripts/validate-container-release-digests"
@@ -454,8 +503,8 @@ def test_final_job_creates_checksum_protected_public_release_asset() -> None:
     text = workflow()
     assert "release-manifest:" in text
     assert (
-        "needs: [release-metadata, publish-images, attest-host-updater, "
-        "publish-platform-target]" in text
+        "needs: [release-metadata, publish-images, build-agent-package, "
+        "attest-host-updater, publish-platform-target]" in text
     )
     assert "vonk-forge-images.env" in text
     assert "sha256sum" in text

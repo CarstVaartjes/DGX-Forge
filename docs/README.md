@@ -23,9 +23,11 @@ LiteLLM publishes only routes acknowledged by the control plane.
   PostgreSQL, Caddy, LiteLLM, and observability services. Optional Hermes is a
   default-disabled Compose profile. Caddy is the
   local ingress boundary; it is not the global website host.
-- GitHub Actions in this repository builds, tests, signs, and publishes the
-  `vonk-forge-agent` ARM64 Debian package to the public Cloudflare R2 APT
-  repository at `packages.vonkforge.ai`.
+- One stable Git tag drives the GitHub Actions platform release: it builds,
+  tests, signs, and publishes the API/worker/Hermes images and the matching
+  `vonk-forge-agent` ARM64 Debian package. The verified package can then be
+  published to the public Cloudflare R2 APT repository at
+  `packages.vonkforge.ai`.
 - The initial local product does not require Railway or a global catalog. The
   future `vonk-forge-web` frontend belongs on Cloudflare Pages; its global
   API/validation worker/PostgreSQL backend may later run on Railway.

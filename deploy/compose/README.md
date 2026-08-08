@@ -53,19 +53,23 @@ the stable-tag workflow can publish. Dependabot cannot publish: it only opens
 weekly dependency-update pull requests, which a maintainer must review, merge,
 and deliberately release with a stable version tag after enablement.
 
-When enabled in the future, GitHub Actions publishes only stable version tags
-to these three packages:
+When enabled, one stable version tag builds and publishes these three packages
+and the matching ARM64 `vonk-forge-agent` Debian package as one platform
+release:
 
 ```text
 ghcr.io/carstvaartjes/vonk-forge-api
 ghcr.io/carstvaartjes/vonk-forge-worker
 ghcr.io/carstvaartjes/vonk-forge-hermes
+GitHub Release assets: the signed `vonk-forge-agent_<version>_arm64.deb`
 ```
 
 Do not deploy an individual package, a tag, or a workflow summary. Select the
 immutable `platform/releases/<version>/<sha256>.json` target published by the
-release workflow. That target pins all three images and one verified OCI
-deployment bundle containing the exact Compose graph and configuration assets.
+release workflow. That target pins all three images, the exact agent package
+evidence, and one verified OCI deployment bundle containing the exact Compose
+graph and configuration assets. Never install an agent package or deploy an
+image from a different tag than the selected platform target.
 Maintainers use [Platform release publication](../../docs/runbooks/platform-release-publication.md);
 control-host operators use
 [Platform release update](../../docs/runbooks/platform-release-update.md).

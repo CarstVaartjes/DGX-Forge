@@ -138,8 +138,9 @@ store image layers or registry credentials.
 
 The local control plane is complete without any hosted global service. This
 repository's GitHub Actions release workflow builds, tests, signs, and publishes
-the ARM64 `vonk-forge-agent` Debian package to the Cloudflare R2 APT repository
-at `packages.vonkforge.ai`; package publication is not a Railway job.
+one versioned platform set: the control images, signed platform manifest, and
+matching ARM64 `vonk-forge-agent` Debian package. The optional apt publication
+consumes that exact package at `packages.vonkforge.ai`; it is not a Railway job.
 
 The separate `vonk-forge-web` repository is a future global catalog surface. Its
 frontend is intended for Cloudflare Pages. Only when the global catalog is

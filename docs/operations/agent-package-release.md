@@ -1,10 +1,11 @@
 # GPU node agent package release operations
 
 The production GPU node service is distributed as one reproducible ARM64 Debian
-package. A tag such as `v0.1.0` builds natively on Ubuntu 24.04 ARM64, runs the
-Rust and Debian lifecycle gates, creates a keyless Sigstore attestation, uploads
-the exact artifacts to the GitHub Release, and then publishes that same verified
-`.deb` to `https://packages.vonkforge.ai`.
+package. A platform tag such as `v0.1.0` builds natively on Ubuntu 24.04 ARM64,
+runs the Rust and Debian security gates, creates a keyless Sigstore bundle, and
+attaches that exact `.deb` to the same GitHub Release as the three control-plane
+images and platform manifest. The optional apt publication consumes that
+verified package after the platform release; it does not create another tag.
 
 The workflow never builds community recipe containers. This package contains
 only the Vonk agent, stable supervisor, and narrow host helper.
@@ -90,16 +91,16 @@ revocation procedure for both identities.
 
 ## Release procedure
 
-1. Run the complete read-only CI on the intended commit.
-2. Run `Rust GPU node agent release` manually from `main` with the intended version.
-   Manual runs validate, build, test, and attest but do not publish.
-3. Review the package verifier output, systemd exposure reports, lifecycle test,
+1. Run the complete read-only CI on the intended commit. The `Rust GPU node
+   agent release` workflow is retained as a manual validation tool only; it
+   cannot create a second public release.
+2. Review the package verifier output, systemd exposure reports, lifecycle test,
    Sigstore identity, and physical GPU node acceptance evidence.
-4. Create the exact annotated tag `v<major>.<minor>.<patch>` on that reviewed
+3. Create the exact annotated tag `v<major>.<minor>.<patch>` on that reviewed
    commit and push it. Never move or reuse a release tag.
-5. Approve `agent-release`, then separately approve `apt-release` after the
-   GitHub Release assets are visible.
-6. Verify `InRelease` and installation from a disposable Ubuntu 24.04 ARM64 host.
+4. Approve `agent-release` as part of the unified platform workflow, then
+   separately approve `apt-release` after the GitHub Release assets are visible.
+5. Verify `InRelease` and installation from a disposable Ubuntu 24.04 ARM64 host.
 
 The workflow refuses prerelease-shaped tags, non-ARM64 builds, downgrade tests
 that succeed, non-reproducible packages, mismatched release fingerprints, and
@@ -136,7 +137,7 @@ For a GitHub Release download, verify the keyless identity before installation:
 ```bash
 cosign verify-blob \
   --bundle vonk-forge-agent_0.1.0_arm64.deb.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/.*/vonk-forge/.github/workflows/agent-release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-identity-regexp '^https://github.com/.*/vonk-forge/.github/workflows/ci.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   vonk-forge-agent_0.1.0_arm64.deb
 gh attestation verify vonk-forge-agent_0.1.0_arm64.deb --repo CarstVaartjes/vonk-forge

@@ -1,8 +1,6 @@
 name: Rust Vonk Forge agent release
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
@@ -26,7 +24,7 @@ jobs:
     permissions:
       artifact-metadata: write
       attestations: write
-      contents: write
+      contents: read
       id-token: write
     outputs:
       version: ${{ steps.metadata.outputs.version }}
@@ -197,11 +195,7 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign-blob --yes --bundle "dist/${PACKAGE}.sigstore.json" "dist/$PACKAGE"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/agent-release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
-          else
-            identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/agent-release.yml@refs/heads/main$"
-          fi
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/agent-release.yml@refs/heads/main$"
           cosign verify-blob \
             --bundle "dist/${PACKAGE}.sigstore.json" \
             --certificate-identity-regexp "$identity" \
@@ -227,161 +221,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: dist/*
-
-      - name: Create public GitHub Release
-        if: github.ref_type == 'tag'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.metadata.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "v$VERSION" dist/* \
-            --verify-tag \
-            --title "Vonk Forge agent v$VERSION" \
-            --notes "Signed ARM64 Vonk Forge agent package. Verify before installation; see docs/operations/agent-package-release.md."
-
-  publish-apt:
-    name: Publish signed packages.vonkforge.ai apt repository
-    if: github.ref_type == 'tag'
-    needs: build-test-sign
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    environment: apt-release
-    concurrency:
-      group: vonk-forge-apt-publication
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    steps:
-      - name: Check out release tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Download verified package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: vonk-agent-release-${{ needs.build-test-sign.outputs.version }}
-          path: dist
-
-      - name: Install repository tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y aptly gnupg rclone
-
-      - name: Restore private aptly state
-        id: state
-        shell: bash
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_TYPE: s3
-          R2_APT_STATE_BUCKET: ${{ vars.R2_APT_STATE_BUCKET }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/aptly" "$RUNNER_TEMP/apt-public"
-          restored=false
-          if rclone copyto \
-            "r2:${R2_APT_STATE_BUCKET}/latest/aptly-state.tar.gz" \
-            "$RUNNER_TEMP/aptly-state.tar.gz"; then
-            rclone copyto \
-              "r2:${R2_APT_STATE_BUCKET}/latest/aptly-state.tar.gz.sha256" \
-              "$RUNNER_TEMP/aptly-state.tar.gz.sha256"
-            (cd "$RUNNER_TEMP" && sha256sum -c aptly-state.tar.gz.sha256)
-            if tar -tzf "$RUNNER_TEMP/aptly-state.tar.gz" \
-              | awk '$0 !~ /^aptly(\/|$)/ || $0 ~ /(^|\/)\.\.(\/|$)/ || $0 ~ /^\// { bad=1 } END { exit !bad }'; then
-              echo "aptly state archive contains an unsafe path" >&2
-              exit 1
-            fi
-            if tar -tvzf "$RUNNER_TEMP/aptly-state.tar.gz" | awk '$1 ~ /^[lh]/ { found=1 } END { exit !found }'; then
-              echo "aptly state archive contains links" >&2
-              exit 1
-            fi
-            tar -xzf "$RUNNER_TEMP/aptly-state.tar.gz" -C "$RUNNER_TEMP"
-            restored=true
-          fi
-          printf 'restored=%s\n' "$restored" >> "$GITHUB_OUTPUT"
-
-      - name: Publish signed apt index locally
-        shell: bash
-        env:
-          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
-          APT_REPOSITORY_GPG_PRIVATE_KEY: ${{ secrets.APT_REPOSITORY_GPG_PRIVATE_KEY }}
-          APT_REPOSITORY_GPG_FINGERPRINT: ${{ vars.APT_REPOSITORY_GPG_FINGERPRINT }}
-          PACKAGE: ${{ needs.build-test-sign.outputs.package }}
-          RESTORED: ${{ steps.state.outputs.restored }}
-          VERSION: ${{ needs.build-test-sign.outputs.version }}
-        run: |
-          set -euo pipefail
-          scripts/verify-agent-deb --json "dist/$PACKAGE"
-          install -m 0600 /dev/null "$RUNNER_TEMP/apt-repository-key.asc"
-          install -m 0600 /dev/null "$RUNNER_TEMP/apt-repository-passphrase"
-          printf '%s' "$APT_REPOSITORY_GPG_PRIVATE_KEY" > "$RUNNER_TEMP/apt-repository-key.asc"
-          printf '%s' "$APT_GPG_PASSPHRASE" > "$RUNNER_TEMP/apt-repository-passphrase"
-          export GNUPGHOME=$RUNNER_TEMP/gnupg
-          install -d -m 0700 "$GNUPGHOME"
-          gpg --batch --import "$RUNNER_TEMP/apt-repository-key.asc"
-          fingerprint=$(gpg --batch --with-colons --list-secret-keys \
-            | awk -F: '$1 == "fpr" { print $10; exit }')
-          test -n "$fingerprint"
-          test "$fingerprint" = "$APT_REPOSITORY_GPG_FINGERPRINT"
-          config=$RUNNER_TEMP/aptly.conf
-          jq -n \
-            --arg root "$RUNNER_TEMP/aptly" \
-            --arg publish "$RUNNER_TEMP/apt-public" \
-            '{rootDir:$root,architectures:["arm64"],dependencyFollowSuggests:false,
-              dependencyFollowRecommends:false,
-              FileSystemPublishEndpoints:{r2:{rootDir:$publish,linkMethod:"copy"}}}' \
-            > "$config"
-          if [[ "$RESTORED" != true ]]; then
-            aptly -config="$config" repo create -distribution=stable -component=main vonk-forge
-          fi
-          aptly -config="$config" repo add vonk-forge "dist/$PACKAGE"
-          aptly -config="$config" snapshot create "v$VERSION" from repo vonk-forge
-          common=(-batch -passphrase-file="$RUNNER_TEMP/apt-repository-passphrase" -gpg-key="$fingerprint")
-          if [[ "$RESTORED" == true ]]; then
-            aptly -config="$config" publish switch "${common[@]}" stable filesystem:r2: "v$VERSION"
-          else
-            aptly -config="$config" publish snapshot "${common[@]}" \
-              -architectures=arm64 -distribution=stable -component=main \
-              "v$VERSION" filesystem:r2:
-          fi
-          test -s "$RUNNER_TEMP/apt-public/dists/stable/InRelease"
-          gpg --batch --verify "$RUNNER_TEMP/apt-public/dists/stable/InRelease"
-          gpg --batch --export "$fingerprint" \
-            > "$RUNNER_TEMP/apt-public/vonk-forge-archive-keyring.gpg"
-          gpg --batch --armor --export "$fingerprint" \
-            > "$RUNNER_TEMP/apt-public/vonk-forge-archive-keyring.asc"
-
-      - name: Publish public repository then durable state
-        shell: bash
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_TYPE: s3
-          R2_APT_PUBLIC_BUCKET: ${{ vars.R2_APT_PUBLIC_BUCKET }}
-          R2_APT_STATE_BUCKET: ${{ vars.R2_APT_STATE_BUCKET }}
-          VERSION: ${{ needs.build-test-sign.outputs.version }}
-        run: |
-          set -euo pipefail
-          test -n "$R2_APT_PUBLIC_BUCKET"
-          test -n "$R2_APT_STATE_BUCKET"
-          rclone copy "$RUNNER_TEMP/apt-public/" "r2:${R2_APT_PUBLIC_BUCKET}/"
-          tar -czf "$RUNNER_TEMP/aptly-state.tar.gz" -C "$RUNNER_TEMP" aptly
-          (cd "$RUNNER_TEMP" && sha256sum aptly-state.tar.gz > aptly-state.tar.gz.sha256)
-          rclone copyto "$RUNNER_TEMP/aptly-state.tar.gz" \
-            "r2:${R2_APT_STATE_BUCKET}/versions/${VERSION}/aptly-state.tar.gz"
-          rclone copyto "$RUNNER_TEMP/aptly-state.tar.gz.sha256" \
-            "r2:${R2_APT_STATE_BUCKET}/versions/${VERSION}/aptly-state.tar.gz.sha256"
-          rclone copyto "$RUNNER_TEMP/aptly-state.tar.gz" \
-            "r2:${R2_APT_STATE_BUCKET}/latest/aptly-state.tar.gz"
-          rclone copyto "$RUNNER_TEMP/aptly-state.tar.gz.sha256" \
-            "r2:${R2_APT_STATE_BUCKET}/latest/aptly-state.tar.gz.sha256"
-          printf 'Published v%s to https://packages.vonkforge.ai/\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"

@@ -116,7 +116,9 @@ def test_builder_refuses_to_overwrite_output(tmp_path: Path) -> None:
     assert output.read_text() == "existing\n"
 
 
-def test_builder_replaces_review_input_artifact_with_ci_evidence(tmp_path: Path) -> None:
+def test_builder_replaces_review_input_artifact_with_ci_evidence(
+    tmp_path: Path,
+) -> None:
     source, descriptor_path, _ = _inputs(tmp_path)
     output = tmp_path / "platform-release.json"
     evidence_path = tmp_path / "api-evidence.json"
@@ -148,6 +150,62 @@ def test_builder_replaces_review_input_artifact_with_ci_evidence(tmp_path: Path)
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(output.read_bytes())["control"]["images"]["api"] == evidence[
-        "artifact"
+    assert (
+        json.loads(output.read_bytes())["control"]["images"]["api"]
+        == evidence["artifact"]
+    )
+
+
+def test_builder_replaces_review_input_agent_package_with_ci_evidence(
+    tmp_path: Path,
+) -> None:
+    source, descriptor_path, _ = _inputs(tmp_path)
+    source_document = json.loads(source.read_bytes())
+    source_document["agent_packages"] = [
+        {
+            "architecture": "linux-arm64",
+            "name": "vonk-forge-agent",
+            "version": "1.2.0",
+            "filename": "vonk-forge-agent_1.2.0_arm64.deb",
+            "sha256": "0" * 64,
+            "size": 4096,
+            "sbom_sha256": "1" * 64,
+            "provenance_sha256": "2" * 64,
+            "sigstore_bundle_sha256": "3" * 64,
+        }
     ]
+    source.write_bytes(_canonical(source_document))
+    output = tmp_path / "platform-release.json"
+    evidence_path = tmp_path / "agent-package-evidence.json"
+    evidence = {
+        "package": {
+            "architecture": "linux-arm64",
+            "name": "vonk-forge-agent",
+            "version": "1.2.0",
+            "filename": "vonk-forge-agent_1.2.0_arm64.deb",
+            "sha256": "a" * 64,
+            "size": 8192,
+            "sbom_sha256": "b" * 64,
+            "provenance_sha256": "c" * 64,
+            "sigstore_bundle_sha256": "d" * 64,
+        },
+        "locator": "agent_packages.linux-arm64",
+        "schema_version": 1,
+    }
+    evidence_path.write_bytes(_canonical(evidence))
+
+    result = _run(
+        "--input",
+        str(source),
+        "--bundle-descriptor",
+        str(descriptor_path),
+        "--agent-package-evidence",
+        str(evidence_path),
+        "--version",
+        "1.2.0",
+        "--output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_bytes())["agent_packages"] == [evidence["package"]]

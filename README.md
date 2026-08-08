@@ -12,9 +12,11 @@ workload-release path while the catalog migration is completed; a recipe never
 needs a Git commit or pull request in order to be imported or run.
 
 The initial product has no Railway or global-catalog dependency. This repository
-owns the GPU node/NAS runtime and its GitHub Actions agent release: signed ARM64
-`vonk-forge-agent` Debian packages are published to the Cloudflare R2 APT
-repository at `packages.vonkforge.ai`. The separate `vonk-forge-web` repository
+owns the GPU node/NAS runtime and its GitHub Actions platform release: one
+stable `vX.Y.Z` tag builds the signed ARM64 `vonk-forge-agent` Debian package,
+the API/worker/Hermes control images, and their signed platform manifest. The
+same verified package can then be published to the Cloudflare R2 APT repository
+at `packages.vonkforge.ai`. The separate `vonk-forge-web` repository
 will later publish a global catalog frontend through Cloudflare Pages and may
 add a Railway API/worker/PostgreSQL service; that future service is optional and
 never replaces the local catalog authority.

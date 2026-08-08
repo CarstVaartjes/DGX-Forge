@@ -55,6 +55,19 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class DebianPackage:
+    architecture: str
+    name: str
+    version: str
+    filename: str
+    sha256: str
+    size: int
+    sbom_sha256: str
+    provenance_sha256: str
+    sigstore_bundle_sha256: str
+
+
+@dataclass(frozen=True)
 class ArchitectureArtifact:
     architecture: str
     artifact: Artifact
@@ -124,9 +137,7 @@ class PlatformIdentity:
             raise PlatformReleaseError("platform target identity is invalid")
         _prefixed_digest(self.release_digest, "release digest")
         _prefixed_digest(self.build_digest, "build digest")
-        _prefixed_digest(
-            self.deployment_bundle_digest, "deployment bundle digest"
-        )
+        _prefixed_digest(self.deployment_bundle_digest, "deployment bundle digest")
         if self.architecture not in {"linux-arm64", "linux-x86_64"}:
             raise PlatformReleaseError("platform architecture is invalid")
         for value in (self.control_api_protocol, self.agent_protocol):
@@ -154,6 +165,7 @@ class PlatformRelease:
     control: ControlRelease
     database: DatabaseRelease
     agents: tuple[ArchitectureArtifact, ...]
+    agent_packages: tuple[DebianPackage, ...]
     supervisors: tuple[ArchitectureArtifact, ...]
     tooling: tuple[ArchitectureArtifact, ...]
     predecessors: tuple[AuthorizedPredecessor, ...]
@@ -193,6 +205,7 @@ class PlatformRelease:
 
     @classmethod
     def _parse(cls, document: dict[str, Any]) -> PlatformRelease:
+        platform_version = _semantic_version(document["platform_version"])
         control_document = document["control"]
         database_document = document["database"]
         agents = _architecture_artifacts(document["agents"], require_protocol=True)
@@ -212,14 +225,17 @@ class PlatformRelease:
         deployment_bundle = _deployment_bundle(document["deployment_bundle"])
         predecessors = _predecessors(
             document["rollback"]["predecessors"],
-            platform_version=document["platform_version"],
+            platform_version=platform_version,
+        )
+        agent_packages = _debian_packages(
+            document.get("agent_packages", []), platform_version=platform_version
         )
         canonical = (
             json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode()
         images = control_document["images"]
         return cls(
-            platform_version=_semantic_version(document["platform_version"]),
+            platform_version=platform_version,
             build_digest=_prefixed_digest(document["build_digest"], "build digest"),
             host_updater_abi=host_updater_abi,
             deployment_bundle=deployment_bundle,
@@ -236,6 +252,7 @@ class PlatformRelease:
                 predecessor_compatible=database_document["predecessor_compatible"],
             ),
             agents=agents,
+            agent_packages=agent_packages,
             supervisors=supervisors,
             tooling=tooling,
             predecessors=predecessors,
@@ -331,6 +348,36 @@ def _artifact(document: dict[str, Any]) -> Artifact:
         sbom_sha256=document["sbom_sha256"],
         provenance_sha256=document["provenance_sha256"],
     )
+
+
+def _debian_packages(
+    documents: list[dict[str, Any]], *, platform_version: str
+) -> tuple[DebianPackage, ...]:
+    seen: set[str] = set()
+    result: list[DebianPackage] = []
+    for document in documents:
+        architecture = document["architecture"]
+        if architecture in seen:
+            raise PlatformReleaseError("agent package architectures overlap")
+        if document["version"] != platform_version:
+            raise PlatformReleaseError("agent package version disagrees with platform")
+        if not document["filename"].endswith(".deb"):
+            raise PlatformReleaseError("agent package filename is invalid")
+        seen.add(architecture)
+        result.append(
+            DebianPackage(
+                architecture=architecture,
+                name=document["name"],
+                version=document["version"],
+                filename=document["filename"],
+                sha256=document["sha256"],
+                size=document["size"],
+                sbom_sha256=document["sbom_sha256"],
+                provenance_sha256=document["provenance_sha256"],
+                sigstore_bundle_sha256=document["sigstore_bundle_sha256"],
+            )
+        )
+    return tuple(result)
 
 
 def _deployment_bundle(document: dict[str, Any]) -> OciDeploymentBundle:

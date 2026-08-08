@@ -81,9 +81,10 @@ def _write_new(path: Path, raw: bytes) -> None:
 
 
 def _bind_artifact(document: dict[str, Any], evidence: dict[str, Any]) -> None:
-    if set(evidence) != {"artifact", "locator", "schema_version"} or evidence.get(
-        "schema_version"
-    ) != 1:
+    if (
+        set(evidence) != {"artifact", "locator", "schema_version"}
+        or evidence.get("schema_version") != 1
+    ):
         raise BuildError("artifact evidence is invalid")
     locator = evidence.get("locator")
     artifact = evidence.get("artifact")
@@ -112,11 +113,40 @@ def _bind_artifact(document: dict[str, Any], evidence: dict[str, Any]) -> None:
     destination[key] = artifact
 
 
+def _bind_agent_package(document: dict[str, Any], evidence: dict[str, Any]) -> None:
+    if (
+        set(evidence) != {"package", "locator", "schema_version"}
+        or evidence.get("schema_version") != 1
+    ):
+        raise BuildError("agent package evidence is invalid")
+    locator = evidence.get("locator")
+    package = evidence.get("package")
+    if (
+        not isinstance(locator, str)
+        or not locator.startswith("agent_packages.")
+        or not isinstance(package, dict)
+    ):
+        raise BuildError("agent package evidence is invalid")
+    architecture = locator.removeprefix("agent_packages.")
+    matches = [
+        item
+        for item in document.get("agent_packages", [])
+        if isinstance(item, dict) and item.get("architecture") == architecture
+    ]
+    if len(matches) != 1:
+        raise BuildError("agent package evidence locator is unknown")
+    matches[0].clear()
+    matches[0].update(package)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="build-platform-manifest")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--bundle-descriptor", required=True, type=Path)
     parser.add_argument("--artifact-evidence", action="append", default=[], type=Path)
+    parser.add_argument(
+        "--agent-package-evidence", action="append", default=[], type=Path
+    )
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -137,6 +167,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise BuildError("artifact evidence locators overlap")
             seen_locators.add(locator)
             _bind_artifact(release_input, evidence)
+        for evidence_path in args.agent_package_evidence:
+            evidence = _read_object(evidence_path, "agent package evidence")
+            locator = evidence.get("locator")
+            if not isinstance(locator, str) or locator in seen_locators:
+                raise BuildError("release evidence locators overlap")
+            seen_locators.add(locator)
+            _bind_agent_package(release_input, evidence)
         document = release_input | {"deployment_bundle": bundle}
         raw = _canonical(document)
         try:

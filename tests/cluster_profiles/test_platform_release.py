@@ -139,6 +139,31 @@ def test_platform_release_loads_strict_typed_contract(tmp_path: Path) -> None:
     assert len(release.digest) == 71
 
 
+def test_platform_release_exposes_version_bound_agent_debian_package() -> None:
+    document = _manifest()
+    document["agent_packages"] = [
+        {
+            "architecture": "linux-arm64",
+            "name": "vonk-forge-agent",
+            "version": "1.2.0",
+            "filename": "vonk-forge-agent_1.2.0_arm64.deb",
+            "sha256": SHA_A,
+            "size": 4096,
+            "sbom_sha256": SHA_B,
+            "provenance_sha256": SHA_C,
+            "sigstore_bundle_sha256": SHA_D,
+        }
+    ]
+
+    release = PlatformRelease.from_bytes(
+        (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+
+    assert release.agent_packages[0].architecture == "linux-arm64"
+    assert release.agent_packages[0].version == release.platform_version
+    assert release.agent_packages[0].filename.endswith("_arm64.deb")
+
+
 def test_platform_release_loads_exact_oci_bundle_and_predecessor_contract() -> None:
     release = PlatformRelease.from_bytes(
         (json.dumps(_manifest(), sort_keys=True, separators=(",", ":")) + "\n").encode()

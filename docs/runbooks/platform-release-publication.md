@@ -5,12 +5,20 @@ control services, host deployment assets, GPU node agents, and their signed
 platform metadata. Workload packages have an independent publication system;
 adding or updating a model stack must not require this workflow.
 
+One immutable `vX.Y.Z` tag is the release unit. The same tagged commit builds
+the ARM64 `vonk-forge-agent` Debian package and the API, worker, and Hermes
+control-plane images. CI binds their digests, SBOM/provenance hashes, the
+package signature hash, and deployment bundle into one platform manifest and
+attaches the exact package and image evidence to the same GitHub Release.
+There is no second tag or independently published agent release.
+
 ## Release input
 
 A stable `vX.Y.Z` tag must point at a reviewed commit containing canonical JSON
 at `release/platform/X.Y.Z.input.json`. The document contains every v2 platform
-release field except `deployment_bundle`; the workflow derives that descriptor
-from the canonical bundle bytes. A release PR must update exact predecessor,
+release field except `deployment_bundle`; it also contains a version-matching
+placeholder in `agent_packages` for each published Debian architecture. The
+workflow derives that descriptor from the canonical bundle bytes. A release PR must update exact predecessor,
 host-updater ABI, database, protocol, image, agent, SBOM, and provenance
 bindings. Do not hand-write an OCI digest or reuse a manifest from another
 checkout.
@@ -62,6 +70,7 @@ scripts/build-platform-manifest \
   --artifact-evidence api-evidence.json \
   --artifact-evidence worker-evidence.json \
   --artifact-evidence hermes-evidence.json \
+  --agent-package-evidence agent-package-evidence.json \
   --version "$RELEASE_VERSION" \
   --output platform-release.json
 ```
@@ -122,7 +131,8 @@ with byte-identical content is accepted. Any different update must advance
 target steps are safe to retry after interruption. The channel is updated last,
 is discovery-only, and is never an installation or rollback authority.
 
-The workflow uploads and attaches the canonical image manifests, SBOMs,
+The workflow uploads and attaches the signed ARM64 `.deb`, its checksum,
+embedded SBOM/provenance and keyless Sigstore bundle, plus the canonical image manifests, SBOMs,
 provenance documents and artifact-evidence records, the deployment descriptor,
 platform manifest, bundle/authority receipts, and the deterministic installable
 host-updater archive plus its checksum. Keep them together. The receipts bind
