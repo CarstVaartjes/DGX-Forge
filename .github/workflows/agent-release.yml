@@ -137,9 +137,7 @@ jobs:
           sudo env SYSTEMD_OFFLINE=1 dpkg -i "$package"
           getent passwd vonk-agent >/dev/null
           test "$(stat -c %a /var/lib/vonk-forge-agent)" = 700
-          sudo ls -la /var/lib/vonk-forge/supervisor /var/lib/vonk-forge/slots
-          current_target=$(readlink /var/lib/vonk-forge/supervisor/current)
-          printf 'initial supervisor current: %s\n' "$current_target"
+          current_target=$(sudo readlink /var/lib/vonk-forge/supervisor/current)
           test "$(basename "$current_target")" = a
           sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
             /run/vonk-forge-agent
@@ -167,7 +165,7 @@ jobs:
             "lifecycle/vonk-forge-agent_${next_version}_arm64.deb"
           grep -Fx '# lifecycle-preserved' /etc/vonk-forge-agent/agent.toml >/dev/null
           test -x /var/lib/vonk-forge/slots/b/vonk-agent
-          test "$(basename "$(readlink /var/lib/vonk-forge/supervisor/current)")" = a
+          test "$(basename "$(sudo readlink /var/lib/vonk-forge/supervisor/current)")" = a
 
           downgrade_log=$RUNNER_TEMP/downgrade.log
           if sudo env SYSTEMD_OFFLINE=1 dpkg -i "$package" >"$downgrade_log" 2>&1; then
