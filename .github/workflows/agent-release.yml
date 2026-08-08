@@ -129,6 +129,7 @@ jobs:
           VONK_SOURCE_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
+          trap 'echo "lifecycle check failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             fuse-overlayfs podman slirp4netns
