@@ -14,6 +14,30 @@ authored/imported recipe revisions, WorkloadRun import reports, installations,
 placements, and runs; those records remain available when Git or the optional
 global catalog is unavailable.
 
+## Local NAS development stack
+
+Use the development stack to try the control API, bundled web interface,
+PostgreSQL catalog, and worker on a Docker-capable NAS before publishing a
+platform release. It builds the API and worker from the checkout and uses only
+development sentinels; it does not use GHCR, TUF keys, mTLS credentials, Caddy,
+LiteLLM, Cloudflare, or Railway.
+
+From the repository checkout:
+
+```bash
+scripts/dev-compose
+curl --fail http://127.0.0.1:8080/api/v1/readyz
+scripts/dev-compose logs -f control-api
+scripts/dev-compose down
+```
+
+The wrapper creates `.dev/vonk-forge-secrets/` locally and never commits it.
+The API is bound to loopback on port `8080`; use an explicit SSH or Tailscale
+forward when accessing a NAS from another machine. Set `VONK_DEV_PORT` before
+starting if the port is already in use. This stack is for development only:
+its synthetic platform identity and database are not valid production release
+evidence, and `scripts/dev-compose down -v` removes its development volumes.
+
 ## Recipe containers are source-first
 
 The Compose deployment and recipe workloads are separate layers. Compose starts

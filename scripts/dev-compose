@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+secrets_dir=${VONK_DEV_SECRETS_DIR:-"$repository_root/.dev/vonk-forge-secrets"}
+mkdir -p "$secrets_dir"
+secrets_dir=$(cd "$secrets_dir" && pwd)
+chmod 700 "$secrets_dir"
+
+if [[ ! -e "$secrets_dir/postgres-password" ]]; then
+  openssl rand -hex 24 > "$secrets_dir/postgres-password"
+  chmod 600 "$secrets_dir/postgres-password"
+fi
+if [[ ! -e "$secrets_dir/database-url" ]]; then
+  password=$(<"$secrets_dir/postgres-password")
+  printf 'postgresql+psycopg://control:%s@postgres:5432/control\n' "$password" \
+    > "$secrets_dir/database-url"
+  chmod 600 "$secrets_dir/database-url"
+fi
+if [[ ! -e "$secrets_dir/git-signing-key" ]]; then
+  ssh-keygen -q -t ed25519 -N '' -C vonk-forge-dev \
+    -f "$secrets_dir/git-signing-key"
+  chmod 600 "$secrets_dir/git-signing-key"
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  set -- up -d --build --wait
+fi
+export VONK_DEV_SECRETS_DIR="$secrets_dir"
+exec docker compose \
+  --project-name vonk-forge-dev \
+  --file "$repository_root/deploy/compose/compose.dev.yaml" \
+  "$@"

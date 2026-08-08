@@ -74,6 +74,20 @@ uv sync --dev
 uv run pytest
 ```
 
+To run the control API, bundled web interface, PostgreSQL catalog, and worker
+as locally built development containers on a NAS, use the separate development
+Compose stack:
+
+```bash
+scripts/dev-compose
+curl --fail http://127.0.0.1:8080/api/v1/readyz
+scripts/dev-compose down
+```
+
+This never publishes images or deploys to production. Production uses the
+reviewed digest-pinned platform Compose path described in
+[`deploy/compose/README.md`](deploy/compose/README.md).
+
 The repository deliberately keeps expensive acceptance work local. Pull
 requests run only the focused contract smoke checks and generated-client drift
 check in GitHub Actions. Before requesting review, run the full local tiers

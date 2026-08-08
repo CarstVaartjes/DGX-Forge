@@ -616,7 +616,37 @@ def build_agent_services(
     from .step_ca import StepCertificateAuthority
 
     if settings.agent_runtime != "enabled":
-        raise RuntimeError("agent runtime is disabled")
+        # Local development still needs the durable operation queue and fleet
+        # presence service, but deliberately has no enrollment or certificate
+        # authority.  Agent HTTP routes stay disabled by production_app.
+        operations = AgentJobService(
+            sessions,
+            clock=clock,
+            commit_eligible=commit_eligible,
+            current_commit=current_commit,
+        )
+        policy = ManagementAddressPolicy.parse(
+            settings.management_cidrs or "127.0.0.1/32",
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        )
+        presence = AgentPresenceService(sessions, policy, clock=clock)
+        return AgentApiServices(
+            enrollment=None,
+            operations=operations,
+            sessions=sessions,
+            clock=clock,
+            presence=presence,
+            artifact_root=settings.agent_artifact_root,
+            source_bundles=SourceBundleStore(
+                getattr(settings, "state_path", settings.agent_artifact_root.parent)
+                / "source-bundles"
+            ),
+            tuf_metadata_root=settings.agent_tuf_metadata_root,
+            tuf_target_root=settings.agent_tuf_target_root,
+            workload_tuf_metadata_root=settings.workload_tuf_metadata_root,
+            workload_tuf_target_root=settings.workload_tuf_target_root,
+        )
+
     if settings.agent_intermediate_certificate_path is None:
         raise RuntimeError("agent intermediate certificate path is unavailable")
     if settings.agent_ca_provider == "step-ca":
@@ -2092,10 +2122,14 @@ def production_app() -> FastAPI:
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,
         job_logs=JobLogStore(settings.state_path / "job-logs"),
-        agent=agent_services,
+        agent=(agent_services if settings.agent_runtime == "enabled" else None),
         trusted_agent_proxy_auth=settings.agent_proxy_auth,
-        worker_authority=worker_authority,
-        worker_api_token=settings.worker_api_token,
+        worker_authority=(
+            worker_authority if settings.agent_runtime == "enabled" else None
+        ),
+        worker_api_token=(
+            settings.worker_api_token if settings.agent_runtime == "enabled" else b""
+        ),
         operations=durable_operation_services(
             sessions,
             Path("/routes"),

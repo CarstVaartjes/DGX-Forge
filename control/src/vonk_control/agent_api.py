@@ -110,7 +110,7 @@ class _AuditSink(Protocol):
 
 @dataclass(frozen=True)
 class AgentApiServices:
-    enrollment: EnrollmentService
+    enrollment: EnrollmentService | None
     operations: AgentJobService
     sessions: sessionmaker[Session]
     clock: Callable[[], datetime]
