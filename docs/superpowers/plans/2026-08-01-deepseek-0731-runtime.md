@@ -23,7 +23,7 @@
   `914c35bd7d5607560048e4467c3fdd42e892e297`; the superseding plan pins
   `b131b2a22164675890dd1465fd8862b5cfb6ff13`.
 - Pin model revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`.
-- Resolve `ghcr.io/anemll/draft-vllm-gx10:0.1.1` to and run by immutable digest.
+- Resolve `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` to and run by immutable digest.
 - Require the complete 166,898,660,330-byte snapshot and 166,886,535,336 SafeTensor bytes on both nodes.
 - Serving requires `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and `HF_HUB_DISABLE_XET=1`.
 - Use tensor parallel 2, pipeline parallel 1, distributed executor `mp`, worker-first start, and head-first stop.
@@ -52,7 +52,7 @@
 
 ```python
 def test_rejects_mutable_image_tag(run_verify, lock_tree):
-    lock_tree.images.write_text('image = "ghcr.io/anemll/draft-vllm-gx10:0.1.1"')
+    lock_tree.images.write_text('image = "ghcr.io/anemll/dspark-vllm-gx10:0.1.1"')
     result = run_verify(lock_tree)
     assert result.returncode != 0
     assert "digest" in result.stderr

@@ -92,8 +92,8 @@ accepted evidence for the exact placement and combination.
 | --- | --- | --- | --- | --- |
 | Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable runtime pinned to `b131b2a` | Both GPU nodes, exclusive | Verified and operational; final acceptance deferred |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both GPU nodes, exclusive | Design intent; not cataloged |
-| Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + draft-model GGUF pair | One GPU node, exclusive initially | Verified and operational; final acceptance and profile admission deferred |
-| DS4 branch alternative | `deepseek-agent-single` release variant | `bleysg` draft-model work when merged into the Entrpi DS4 branch | One GPU node, exclusive initially | Same model identity; merged release requires a new fingerprint and full requalification |
+| Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair | One GPU node, exclusive initially | Verified and operational; final acceptance and profile admission deferred |
+| DS4 branch alternative | `deepseek-agent-single` release variant | `bleysg` DSpark work when merged into the Entrpi DS4 branch | One GPU node, exclusive initially | Same model identity; merged release requires a new fingerprint and full requalification |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 GPU node candidate | One GPU node, exclusive | Design intent; not cataloged |
 | Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 GPU node candidate | One GPU node, co-residency candidate | Design intent; not cataloged |
 | Agentic coding LLM | `laguna-s21-single` | Official Laguna S 2.1 NVFP4 candidate through its model-owned runtime | One GPU node, exclusive initially | Planned; qualification pending |

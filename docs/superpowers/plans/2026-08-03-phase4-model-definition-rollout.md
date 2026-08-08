@@ -2,7 +2,7 @@
 
 The active qualification pass is intentionally LLM-only. It covers the
 accepted Mia service, the DS4 single-GPU node definition (including a possible
-`bleysg` draft-model merge into the DS4 branch), Nemotron, Qwen3-VL, and Laguna S
+`bleysg` DSpark merge into the DS4 branch), Nemotron, Qwen3-VL, and Laguna S
 2.1. The image/3D definitions remain cataloged for the broader approved
 design, but are deferred from this pass and cannot be activated or advertised
 as serving endpoints.

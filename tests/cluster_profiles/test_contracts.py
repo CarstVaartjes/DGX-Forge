@@ -353,7 +353,7 @@ def test_profile_overview_records_the_audited_ds4_q2_imatrix_lane() -> None:
         / "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
     ).read_text(encoding="utf-8")
 
-    assert "Audited DS4 v0.5.3 Q2-imatrix + draft-model GGUF pair" in overview
+    assert "Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair" in overview
     assert "MXFP4 remains deferred until both loader support and measured one-GPU node admission exist." in design
     assert "DS4 Flash 0731 MXFP4 candidate" not in overview
     assert "`deepseek`" in overview

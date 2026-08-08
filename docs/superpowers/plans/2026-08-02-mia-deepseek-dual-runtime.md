@@ -20,7 +20,7 @@ logs live under `/srv/models` bind mounts.
 ## Immutable inputs
 
 - Mia source: `b131b2a22164675890dd1465fd8862b5cfb6ff13`
-- Image: `ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`
+- Image: `ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`
 - Model revision: `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`
 - API: `127.0.0.1:8888`
 - Start: GPU node 2 worker, then GPU node 1 head

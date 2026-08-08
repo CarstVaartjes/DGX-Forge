@@ -102,7 +102,7 @@ Expected: FAIL importing operations.
 Map enum members to concrete handler objects. `node.probe` collects existing
 health evidence through a fixed installed collector with no payload arguments,
 a 15-second deadline, 256-KiB output limit, fixed environment, and no shell.
-Add a fixed-path adapter for the pinned NVIDIA Vonk Forge GPU node Enterprise
+Add a fixed-path adapter for the pinned NVIDIA DGX Spark Enterprise
 Manageability bundle. The installed policy fixes bundle digest/version,
 executable paths, exact argument vectors, per-tool deadlines, and output
 limits; the claim cannot select a tool or arguments. Validate the NVIDIA JSON

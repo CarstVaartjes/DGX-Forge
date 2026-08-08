@@ -219,3 +219,36 @@ DS4 Compose render: exit 0
 scripts/verify-supply-chain --json: ok=true; 7 images; 4 SBOMs
 git diff --check: exit 0
 ```
+
+## Round 4 review remediation — 2026-08-08
+
+Restored the remaining upstream and NVIDIA product names identified by review
+without changing Vonk-owned node, service, command, path, or contract names.
+The three historical Mia/runtime documents now use the executable image name
+`ghcr.io/anemll/dspark-vllm-gx10`. Model overviews preserve the DSpark drafter
+name and the exact `dgx-trellis2` and `Trellis2-DGX-Spark-Docker` repository
+names exposed by their URLs.
+
+The NVIDIA documentation references again identify DGX Spark, DGX Dashboard,
+Enterprise Manageability, clustering, update, recovery, and networking guides
+as NVIDIA-owned resources. An adjacent-doc scan also corrected the same
+mechanical rewrite in closely related model summaries and historical plans;
+Vonk-owned placement and runtime terminology remains canonical.
+
+A focused provenance regression test now binds the immutable Mia image and the
+external DSpark, TRELLIS.2, and NVIDIA link labels. Its initial red run failed
+all three checks against the rewritten names, then passed after the corrections.
+The existing model-overview contract assertion was updated from the falsified
+generic drafter label to DSpark.
+
+Fresh verification:
+
+```text
+103 passed — provenance docs plus DS4/Mia adapter and cluster contract tests
+bash tests/runbooks/test_fabric_safety.sh: PASS
+14 passed — focused Compose and NAS runbook tests
+38 passed — supply-chain verifier tests
+scripts/verify-supply-chain --json: ok=true; 7 images; 4 SBOMs
+top-level Compose render: exit 0
+git diff --check: exit 0
+```

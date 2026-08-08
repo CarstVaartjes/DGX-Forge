@@ -83,7 +83,7 @@ Create `README.md` with these sections and content boundaries:
 
 Vonk Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
-model-serving profiles across NVIDIA Vonk Forge GPU node systems. The repository keeps
+model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
 not treated as production-ready until its evidence gates are accepted.
 

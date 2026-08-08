@@ -228,7 +228,7 @@ Context and concurrency acceptance tests are coupled to these lanes: six request
 The approved planned candidate is MiaAI-Lab commit
 `b131b2a22164675890dd1465fd8862b5cfb6ff13`, model revision
 `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`, and image
-`ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`.
+`ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`.
 Deployment does not use mutable branches, tags, or an unverified image.
 
 The local configuration pins:
@@ -466,10 +466,10 @@ The source results came from specific upstream hardware state and profile settin
 
 ## References
 
-- [NVIDIA Vonk Forge GPU node user guide](https://docs.nvidia.com/dgx/dgx-spark/)
+- [NVIDIA DGX Spark user guide](https://docs.nvidia.com/dgx/dgx-spark/)
 - [NVIDIA ConnectX-7 Cluster Assistant](https://docs.nvidia.com/sync/latest/cluster-assistant.html)
-- [NVIDIA two-GPU node networking guide](https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks)
-- [NVIDIA Vonk Forge GPU node update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
+- [NVIDIA two-Spark networking guide](https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks)
+- [NVIDIA DGX Spark update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
 - [DeepSeek-V4-Flash-0731 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731)
 - [MiaAI-Lab dual-GPU node 0731 recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
 - [MiaAI-Lab 0731 measurements](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)

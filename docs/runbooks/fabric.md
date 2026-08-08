@@ -398,6 +398,6 @@ two-node NCCL run selected both `rocep1s0f1:1` and `roceP2p1s0f1:1` through
 RDMA-disabled diagnostics were observed but do not invalidate the selected
 NET/IB transport. Do not force undocumented `NCCL_NET_GDR_LEVEL` settings.
 
-Primary references: [NVIDIA Vonk Forge GPU node clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
+Primary references: [NVIDIA DGX Spark clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
 for the physical topology and [NVIDIA Sync Cluster Assistant](https://docs.nvidia.com/sync/latest/cluster-assistant.html)
 for the 200 Gb/s negotiated state and 184 Gb/s lower speed-test bound.
