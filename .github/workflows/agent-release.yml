@@ -141,7 +141,7 @@ jobs:
           test "$(basename "$current_target")" = a
           sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
             /run/vonk-forge-agent
-          sudo -u vonk-agent env \
+          sudo -H -u vonk-agent env \
             HOME=/var/lib/vonk-forge-agent \
             XDG_DATA_HOME=/var/lib/vonk-forge-agent \
             XDG_RUNTIME_DIR=/run/vonk-forge-agent \
