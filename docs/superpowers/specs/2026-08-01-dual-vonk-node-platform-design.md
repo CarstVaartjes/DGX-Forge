@@ -259,7 +259,7 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 ### `maintenance`
 
 - Stops all GPU model containers on both nodes.
-- Leaves GPU node SSH and Vonk Forge Dashboard available; external Caddy continues returning its maintenance response.
+- Leaves GPU node SSH and DGX Dashboard available; external Caddy continues returning its maintenance response.
 - Is the required state before OS, firmware, driver, or fabric maintenance.
 
 ### Multi-runtime Model Definitions and Cluster Profiles
@@ -274,7 +274,7 @@ health, output-quality, capacity, and lifecycle gates.
 
 ## Cluster Profile controller
 
-There is no NVIDIA-standard Cluster Profile switcher for Vonk Forge GPU node. The
+There is no NVIDIA-standard Cluster Profile switcher for DGX Spark. The
 platform therefore uses thin, project-local `vonkctl` logic over ordinary
 runtime commands and SSH. It is not a daemon and does not hide the underlying
 commands.
@@ -346,7 +346,7 @@ The validation fixture pins sampling parameters and records the runtime digest, 
 - Install the `Vonk Forge GPU node Admin` public key on both GPU nodes, then verify fresh agent-backed sessions before changing SSH authentication.
 - Run `sshd -t` before every SSH configuration reload.
 - After key verification on both nodes, set `PasswordAuthentication no` and `KbdInteractiveAuthentication no` in a managed drop-in and reload SSH.
-- Verify key login again, then verify a connection with public-key authentication disabled is rejected. Retain local console/Vonk Forge Dashboard recovery access.
+- Verify key login again, then verify a connection with public-key authentication disabled is rejected. Retain local console/DGX Dashboard recovery access.
 - Do not copy the Mac's private key to either GPU node or use SSH agent forwarding.
 - Keep the controller's dedicated private key only on the external control host; each GPU node restricts its public key with a forced `node-nodectl` command and source-address rule.
 - Keep secrets out of Git, Compose files, logs, process arguments where avoidable, and command histories.
@@ -360,14 +360,14 @@ The validation fixture pins sampling parameters and records the runtime digest, 
 
 ## Updates and Change Control
 
-Both GPU nodes must end maintenance on matching supported Vonk Forge OS, driver, CUDA, firmware, and container-runtime versions. Initial updates use Vonk Forge Dashboard, which NVIDIA recommends over ad-hoc package upgrades.
+Both GPU nodes must end maintenance on matching supported DGX OS, driver, CUDA, firmware, and container-runtime versions. Initial updates use DGX Dashboard, which NVIDIA recommends over ad-hoc package upgrades.
 
 Updates occur only in `maintenance`:
 
 1. Back up configuration, export the inventory, and record current versions.
 2. Review release notes, known issues, and firmware reversibility.
 3. Update GPU node 2 first.
-4. Reboot GPU node 2 and validate SSH, Vonk Forge Dashboard, GPU visibility, Docker GPU access, storage, and fabric-interface state without starting a distributed profile.
+4. Reboot GPU node 2 and validate SSH, DGX Dashboard, GPU visibility, Docker GPU access, storage, and fabric-interface state without starting a distributed profile.
 5. Stop if GPU node 2 fails; do not update GPU node 1.
 6. Update and reboot GPU node 1.
 7. Compare both nodes, then rerun fabric, RDMA, NCCL, container, profile-ladder, quality, and performance gates.

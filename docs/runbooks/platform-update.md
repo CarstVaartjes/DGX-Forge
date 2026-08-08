@@ -32,7 +32,7 @@ to determine the installed OTA level.
 
 | Component | NVIDIA current table | GPU node 1 observed | GPU node 2 observed | Gate |
 | --- | --- | --- | --- | --- |
-| Effective Vonk Forge OS OTA | `7.5.0` | `7.5.0` | `7.5.0` | Dashboard says no update is pending |
+| Effective DGX OS OTA | `7.5.0` | `7.5.0` | `7.5.0` | Dashboard says no update is pending |
 | Ubuntu | not separately pinned | `24.04.4 LTS` | `24.04.4 LTS` | exact match |
 | Kernel | `6.17` family | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` | exact match after update |
 | NVIDIA driver | `580.159.03` | `580.173.02` | `580.173.02` | do not downgrade; exact node match |
@@ -186,7 +186,7 @@ REMOTE
 
 Stage the audited privileged validator from the Mac and compare its local and
 remote SHA-256 before running it. The script uses the exact CUDA image in
-NVIDIA's Vonk Forge GPU node container-runtime guide. The validator still intentionally
+NVIDIA's DGX Spark container-runtime guide. The validator still intentionally
 runs with sudo even though `carst` now belongs to the Docker group: it also
 reads the root-only kernel log and validates privileged storage/filesystem
 state, failing closed on read errors or storage/filesystem errors.
@@ -264,7 +264,7 @@ cmp -s /tmp/vonk-node-2-platform.json /tmp/vonk-node-1-platform.json
 
 `cmp` must exit zero. Also compare the Dashboard firmware versions exactly;
 the inventory collector does not capture every firmware component. A mismatch
-in Vonk Forge OS, kernel, driver, CUDA, Docker, Compose, containerd, NVIDIA Container
+in DGX OS, kernel, driver, CUDA, Docker, Compose, containerd, NVIDIA Container
 Toolkit, UEFI, EC, USB PD, TPM, or SoC is a hard stop.
 
 ## Update record
@@ -278,7 +278,7 @@ inventories.
 | Dashboard result | `No Available Updates` (user-confirmed) | `No Available Updates` (user-confirmed) |
 | Installation completed at (UTC), or `not required` | `not required` | `not required` |
 | Reboot completed at (UTC), or `not required` | `2026-08-01T20:39:02Z`; identity-repair reboot | `2026-08-01T20:47:12Z`; identity-repair reboot |
-| Effective Vonk Forge OS OTA | `7.5.0` | `7.5.0` |
+| Effective DGX OS OTA | `7.5.0` | `7.5.0` |
 | Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
 | NVIDIA driver | `580.173.02` | `580.173.02` |
 | CUDA Toolkit package | `13.0.3-1` | `13.0.3-1` |

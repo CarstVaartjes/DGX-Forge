@@ -12,7 +12,7 @@
 
 - Work directly on `main`; do not push or open a pull request.
 - The exact NVIDIA archive is `enterprise-lifecycle-integration-scripts-20260520-1602.zip`, version `0.1.0`, SHA-256 `0eb1c93dd839b6bd4136cc8b79ea04a1e44fd637ff6afa6ee9568951a4c179f3`.
-- The slot ELF binds the complete Python/application/native-module closure and resolves no Python package outside itself; the supported Vonk Forge OS kernel/dynamic-loader/glibc ABI is a separate validated platform contract.
+- The slot ELF binds the complete Python/application/native-module closure and resolves no Python package outside itself; the supported DGX OS kernel/dynamic-loader/glibc ABI is a separate validated platform contract.
 - The installer performs no network fetch and accepts one explicit canonical `spk_[0-9a-f]{32}` node ID plus absolute local inputs.
 - Routine operation remains outbound mutual TLS as non-root `vonk-agent`; SSH is neither used nor disabled.
 - No claim selects an origin, repository, path, executable, arguments, adapter, environment, trust root, or shell command.
@@ -496,7 +496,7 @@ Expected: missing unit failures.
 
 Set explicit dependencies so the root supervisor initializes/coordinates before
 the agent starts, without a dependency cycle. Use systemd 249-compatible
-directives for the supported Vonk Forge OS baseline; retain stronger directives
+directives for the supported DGX OS baseline; retain stronger directives
 accepted by that version. Give the root unit only `CAP_CHOWN` for clean-boot
 runtime ownership plus `CAP_DAC_READ_SEARCH` and `CAP_DAC_OVERRIDE` to consume
 the exact `0600` agent-owned marker, and no ambient capability.

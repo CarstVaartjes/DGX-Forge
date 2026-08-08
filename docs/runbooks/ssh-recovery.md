@@ -40,7 +40,7 @@ ssh -o BatchMode=yes \
 
 Keep one already authenticated SSH session open to each node throughout the
 change. Also confirm that a keyboard and display can reach a local terminal on
-each GPU node. Vonk Forge Dashboard by itself is not assumed to provide an emergency
+each GPU node. DGX Dashboard by itself is not assumed to provide an emergency
 shell; use it as a recovery route only if the installed Dashboard version
 explicitly exposes a local console. Do not close the retained session until a
 fresh key-only connection succeeds.

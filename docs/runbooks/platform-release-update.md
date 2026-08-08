@@ -2,7 +2,7 @@
 
 This runbook updates `vonk-forge` itself: the Docker control services on a
 Docker-capable control host and the `vonk-forge` agents on any number of enrolled
-Vonk Forge GPU nodes. It does not update model packages, Vonk Forge OS, firmware, the kernel,
+Vonk Forge GPU nodes. It does not update model packages, DGX OS, firmware, the kernel,
 NVIDIA drivers, or CUDA. Workload packages have an independent release cadence;
 see [Runtime releases](runtime-release.md).
 
@@ -379,9 +379,9 @@ sudo scripts/verify-platform-release \
 The exit status remains blocked until the physical update gates and every other
 first-release gate are present.
 
-## Vonk Forge OS and NVIDIA maintenance boundary
+## DGX OS and NVIDIA maintenance boundary
 
-Vonk Forge OS, firmware, kernel, driver, and CUDA maintenance follows the separate
+DGX OS, firmware, kernel, driver, and CUDA maintenance follows the separate
 [Vonk Forge platform update](platform-update.md) procedure. The pinned NVIDIA
 `vendor update adapter` adapter may contribute reboot readiness, next-boot kernel,
 and kernel rollback evidence to that workflow. It cannot authorize a Vonk Forge

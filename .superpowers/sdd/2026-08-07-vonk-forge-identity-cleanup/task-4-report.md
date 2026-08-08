@@ -252,3 +252,34 @@ scripts/verify-supply-chain --json: ok=true; 7 images; 4 SBOMs
 top-level Compose render: exit 0
 git diff --check: exit 0
 ```
+
+## Round 5 review remediation — 2026-08-08
+
+Restored NVIDIA's remaining DGX OS and DGX Dashboard product identities across
+the operator runbooks, platform documentation, and historical design and
+implementation records. All 23 mechanical substitutions identified by review
+now use the vendor product names. The same provenance audit restored DGX Spark
+in NVIDIA's container-runtime guide, published Nemotron capacity evidence, and
+the NVIDIA Cluster Profile statement.
+
+Vonk-owned GPU node terminology remains unchanged when it identifies the fleet,
+agent scope, placement paths, administration key, or other Vonk contracts. No
+service, package, filesystem path, node label, or application namespace changed
+in this remediation.
+
+The documentation provenance regression test now rejects the false NVIDIA
+product substitutions across `README.md` and every Markdown document beneath
+`docs/`. Its initial red run failed on the rewritten Nemotron evidence; after
+the corrections, all four focused provenance tests pass.
+
+Fresh verification:
+
+```text
+4 passed — external documentation provenance tests
+78 passed — full Compose and NAS runbook tests
+38 passed — supply-chain verifier tests
+bash tests/runbooks/test_fabric_safety.sh: PASS
+scripts/verify-supply-chain --json: ok=true; 7 images; 4 SBOMs
+top-level Compose render: exit 0
+git diff --check: exit 0
+```

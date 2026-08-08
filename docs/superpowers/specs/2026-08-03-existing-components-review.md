@@ -132,7 +132,7 @@ that already owns each boundary:
    platform evidence with the existing Vonk Forge fabric/runtime fields;
    diagnostic/log modes remain explicit, bounded, and redacted.
 8. Agent Migration Tasks 1, 3, 5, and 6 add fresh/reimage cloud-init mode,
-   record NVIDIA-tool provenance, and distinguish Vonk Forge OS maintenance from
+   record NVIDIA-tool provenance, and distinguish DGX OS maintenance from
    Vonk Forge application releases. Existing-node SSH bootstrap remains a
    one-time compatibility path.
 9. Platform Update Tasks retain TUF/OCI for Vonk Forge. NVIDIA

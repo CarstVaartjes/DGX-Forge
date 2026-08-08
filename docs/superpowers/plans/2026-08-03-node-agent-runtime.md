@@ -14,7 +14,7 @@
 - The network protocol cannot invoke shell, arbitrary commands, paths, environment variables, or uninstalled adapters.
 - Agent state and private keys use restrictive ownership, no symlink traversal, atomic writes, and bounded files.
 - Operations are idempotent or define explicit inspect/compensate behavior before retry.
-- Agent installation supports ARM64 Vonk Forge OS and does not depend on Docker membership or root during normal execution.
+- Agent installation supports ARM64 DGX OS and does not depend on Docker membership or root during normal execution.
 
 ---
 
@@ -277,7 +277,7 @@ installation.
 - [ ] **Step 4: Run packaging and systemd security checks**
 
 Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/nodes/test_install_vonk_agent.py -q && systemd-analyze security agent/systemd/vonk-forge-agent.service`
-Expected: tests pass; review and record any unavailable sandbox directive on target Vonk Forge OS.
+Expected: tests pass; review and record any unavailable sandbox directive on target DGX OS.
 
 - [ ] **Step 5: Commit supervisor/install**
 

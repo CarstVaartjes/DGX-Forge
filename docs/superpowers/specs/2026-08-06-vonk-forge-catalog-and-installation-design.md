@@ -489,7 +489,7 @@ prompt for use with an LLM assistant. LLM output is guidance, not acceptance
 evidence.
 
 A read-only `vonk diagnose` or equivalent tool produces structured pass,
-warning, and fail results for Vonk Forge OS, architecture, NVIDIA container support,
+warning, and fail results for DGX OS, architecture, NVIDIA container support,
 Docker configuration, storage, memory, networking, time, certificates, and
 optional RDMA prerequisites. Remediation is explicit and never smuggled into a
 recipe or silently applied by diagnostics.
@@ -511,7 +511,7 @@ sudo vonk-agent pair https://controller-name
 
 The eventual signed repository at a dedicated package endpoint supports normal
 `apt update`, `apt install vonk-agent`, and operator-controlled upgrades.
-Package provenance, signature, digest, SBOM, and supported Vonk Forge OS range are
+Package provenance, signature, digest, SBOM, and supported DGX OS range are
 published with every release.
 
 The production agent, stable supervisor, and restricted privileged helper are

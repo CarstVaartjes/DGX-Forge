@@ -61,7 +61,7 @@ builder; x86_64 CI proves the closure behavior natively and separately parses
 an ARM64 ELF fixture/policy without execution.
 
 The target kernel, ELF dynamic loader, and glibc ABI remain the separately
-validated Vonk Forge OS platform contract. The slot digest binds the full
+validated DGX OS platform contract. The slot digest binds the full
 Python/application/native-module closure and the artifact may not resolve any
 Python package outside itself; it does not attempt to embed or replace that
 supported host ABI.
@@ -263,7 +263,7 @@ where it does not prevent fixed systemd coordination, an empty capability set
 except the minimum DAC/identity operations actually required, no network
 families, `UMask=0077`, bounded starts, and explicit read/write state/runtime
 paths. `systemd-analyze verify` must accept both units. Security exposure and
-any directive unavailable on the supported Vonk Forge OS systemd version are recorded
+any directive unavailable on the supported DGX OS systemd version are recorded
 instead of silently removed.
 
 ## Failure and test strategy

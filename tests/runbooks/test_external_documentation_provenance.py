@@ -8,6 +8,26 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text()
 
 
+def test_nvidia_product_names_are_not_rebranded_as_vonk_products() -> None:
+    forbidden = (
+        "Vonk Forge OS",
+        "Vonk Forge Dashboard",
+        "NVIDIA's Vonk Forge GPU node container-runtime guide",
+        "run on one Vonk Forge GPU node",
+        "lists one Vonk Forge GPU node as the minimum",
+        "NVIDIA-standard Cluster Profile switcher for Vonk Forge GPU node",
+    )
+    documentation = (ROOT / "README.md", *(ROOT / "docs").rglob("*.md"))
+
+    for path in documentation:
+        text = path.read_text()
+        for false_product_name in forbidden:
+            assert false_product_name not in text, (
+                f"{path.relative_to(ROOT)} rebrands an NVIDIA product as Vonk Forge: "
+                f"{false_product_name}"
+            )
+
+
 def test_historical_mia_docs_preserve_the_pinned_upstream_image_name() -> None:
     expected = "ghcr.io/anemll/dspark-vllm-gx10"
     for relative in (

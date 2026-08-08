@@ -55,7 +55,7 @@ same configured RSA, ECDSA, and Ed25519 host keys. Treat all of those original
 identifiers as compromised; neither GPU node is a trusted identity anchor.
 
 Do this from a keyboard and display attached to each physical GPU node. Before
-repairing identity, use Vonk Forge Dashboard to install every offered system update
+repairing identity, use DGX Dashboard to install every offered system update
 and reboot. The dashboard must report the update as installed with no pending
 update. At the local console, verify that `/etc/vonk-release` contains the OTA
 history and record it in the private inventory:
