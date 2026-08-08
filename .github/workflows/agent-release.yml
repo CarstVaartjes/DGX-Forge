@@ -181,7 +181,7 @@ jobs:
 
           sudo env SYSTEMD_OFFLINE=1 dpkg --remove vonk-forge-agent
           test -f /etc/vonk-forge-agent/agent.toml
-          test -f /var/lib/vonk-forge-agent/lifecycle-preserved
+          sudo test -f /var/lib/vonk-forge-agent/lifecycle-preserved
           sudo env SYSTEMD_OFFLINE=1 dpkg -i \
             "lifecycle/vonk-forge-agent_${next_version}_arm64.deb"
           grep -Fx '# lifecycle-preserved' /etc/vonk-forge-agent/agent.toml >/dev/null
