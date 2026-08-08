@@ -97,14 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           install -d -m 0755 artifacts
-          for unit in vonk-agent-helper vonk-agent-supervisor vonk-agent; do
-            systemd-analyze security --offline=yes \
-              "packaging/systemd/${unit}.service" \
-              | tee "artifacts/${unit}-systemd-security.txt"
-            if [ "$unit" = vonk-agent ]; then maximum='[0-3]'; else maximum='[0-2]'; fi
-            grep -Eq "Overall exposure level.*: ${maximum}\\.[0-9]+ (OK|SAFE)" \
-              "artifacts/${unit}-systemd-security.txt"
-          done
+          scripts/verify-agent-systemd --json \
+            | tee artifacts/vonk-forge-systemd-security.json
       - name: Upload GPU node service exposure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -112,7 +106,7 @@ jobs:
           name: vonk-agent-systemd-security-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 30
-          path: artifacts/vonk-*-systemd-security.txt
+          path: artifacts/vonk-forge-systemd-security.json
 
   generated-clients:
     name: Generated control clients

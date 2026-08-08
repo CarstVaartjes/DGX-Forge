@@ -118,13 +118,8 @@ jobs:
           uvx --from pytest==9.1.1 pytest -q \
             tests/scripts/test_agent_deb.py \
             tests/acceptance/test_rust_agent_parity.py
-          for unit in vonk-agent-helper vonk-agent-supervisor vonk-agent; do
-            systemd-analyze security --offline=yes "packaging/systemd/${unit}.service" \
-              > "dist/${unit}-systemd-security.txt"
-            if [ "$unit" = vonk-agent ]; then maximum='[0-3]'; else maximum='[0-2]'; fi
-            grep -Eq "Overall exposure level.*: ${maximum}\\.[0-9]+ (OK|SAFE)" \
-              "dist/${unit}-systemd-security.txt"
-          done
+          scripts/verify-agent-systemd --json \
+            | tee dist/vonk-forge-systemd-security.json
 
       - name: Test fresh, offline, upgrade, downgrade, remove lifecycle
         shell: bash
