@@ -59,4 +59,4 @@
 
 - [x] Run focused Compose tests, Python checks, and `docker compose config`.
 - [x] Run a local build/start smoke test when a Docker daemon is available.
-- [ ] Review the diff and commit/push the development stack.
+- [x] Review the diff and commit/push the development stack.
