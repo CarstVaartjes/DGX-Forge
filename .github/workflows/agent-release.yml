@@ -141,9 +141,13 @@ jobs:
           test "$(basename "$current_target")" = a
           sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
             /run/vonk-forge-agent
+          sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
+            /var/lib/vonk-forge-agent/.config
           sudo -H -u vonk-agent env \
+            -u SUDO_USER -u SUDO_UID -u SUDO_GID \
             HOME=/var/lib/vonk-forge-agent \
             XDG_DATA_HOME=/var/lib/vonk-forge-agent \
+            XDG_CONFIG_HOME=/var/lib/vonk-forge-agent/.config \
             XDG_RUNTIME_DIR=/run/vonk-forge-agent \
             CONTAINERS_STORAGE_CONF=/etc/vonk-forge-agent/containers-storage.conf \
             podman info --format '{{.Host.Security.Rootless}}' \
